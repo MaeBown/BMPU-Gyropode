@@ -1,0 +1,33 @@
+{
+	"folders": [
+		{
+			"path": "../../HerkuleX"
+		},
+		{
+			"name": "HerkuleXStepMotorCAN",
+			"path": "../../HerkuleXStepMotorCAN"
+		},
+		{
+			"path": "../../../../WebSiteProject"
+		},
+		{
+			"path": "../../Screen"
+		},
+		{
+			"path": "../../Mae"
+		},
+		{
+			"path": "../../Manager"
+		},
+		{
+			"name": "BMPU",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"liveServer.settings.multiRootWorkspaceName": "WebSiteProject",
+		"files.associations": {
+			"*.tcc": "cpp"
+		}
+	}
+}
