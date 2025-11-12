@@ -26,8 +26,8 @@ void callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
 void receptionBT(void);
 
 char FlagCalcul = 0;
-double Te = 7;   // Période d'échantillonage en ms
-double Tau = 355; // Constante de temps du filtre en ms
+double Te = 10;   // Période d'échantillonage en ms
+double Tau = 100; // Constante de temps du filtre en ms
 
 // ! Déclaration des pins
 int ppwmda = 32;
@@ -56,6 +56,7 @@ int pwmga = 0;
 int pwmgb = 0;
 int PWM = 0;
 int PWMReverse = 0;
+bool Unable = false;
 
 // ! Variables pour le filtre de Kalman
 double GTheta = 0;
@@ -73,10 +74,10 @@ double A, B;
 double thetaCons = 0;
 double thetaEq = -0.241786949428571;
 double consigne = 0;
-double instruction = 0;
-double C0 = 0.68;
-double KD = 0.195;
-double Frottement = 0.027;
+double commande = 0;
+double C0 = 1.2;
+double KD = 0;
+double frottement = 0.35;
 double Ec = 0;
 double asserCons = 0;
 double alpha = 255;
@@ -108,28 +109,33 @@ void controle(void *parameters)
     theta = RFTheta + GFTheta;
 
     // ? Calcul de la consigne
-    consigne = (thetaEq + thetaCons) - theta;
-    asserCons = consigne * C0 + (g.gyro.x) * KD;
+    theta =  theta - (thetaEq + thetaCons) ;
+    asserCons = (theta * C0) + (g.gyro.x) * KD;
 
     // Calcul de la commande compensée avec saturation
   if (asserCons > thetaEq) {
-      Ec = asserCons + Frottement;
+      Ec = asserCons - frottement;
   } else if (asserCons < thetaEq) {
-      Ec = asserCons - Frottement;
+      Ec = asserCons + frottement;
   }
 
   // Calculer la commande PWM une seule fois
-  instruction = (int)(Ec * alpha);
-  PWM = 127 + instruction;
-  PWMReverse = 127 - instruction;
-
+  commande = (int)(Ec * alpha);
+  if (commande >= 120)
+  {
+    commande = 120;
+  }
+  if (commande <= -120)
+  {
+    commande = -120;
+  }
   // ! Moteur droit
-  ledcWrite(can0, PWM);
-  ledcWrite(can1, PWMReverse);
+  // ledcWrite(can0, 127 - commande);
+  // ledcWrite(can1, 127 + commande);
   
   // ! Moteur gauche
-  ledcWrite(can2, PWM);
-  ledcWrite(can3, PWMReverse);
+  // ledcWrite(can2, 127 + commande);
+  // ledcWrite(can3, 127 - commande);
 
     FlagCalcul = 1;
 
@@ -198,8 +204,8 @@ void setup()
   ledcSetup(can2, frequency, resolution);
   ledcAttachPin(ppwmda, can0);
   ledcAttachPin(ppwmdb, can1);
-  ledcAttachPin(ppwmga, can2);
-  ledcAttachPin(ppwmgb, can3);
+  ledcAttachPin(ppwmgb, can2);
+  ledcAttachPin(ppwmga, can3);
 
   // ! Calcul des coefficents du filtre sans développement des expressions de la fonction de transfert
   A = 1 / (1 + Tau / Te);
@@ -250,7 +256,7 @@ void reception(char ch)
     }
     if (commande == "CF")
     {
-      Frottement = valeur.toFloat();
+      frottement = valeur.toFloat();
     }
     if (commande == "thetaEq")
     {
@@ -273,8 +279,17 @@ void loop()
     // Serial.printf("%4.2lf %4.2lf %4.2lf \n", a.acceleration.x, a.acceleration.y, a.acceleration.z);
     // Serial.printf("%4.2lf %4.2lf %4.2lf \n", g.gyro.x, g.gyro.y, g.gyro.z);
 
-    // ? Affichage des angles
-    // Serial.printf("%3.9lf %3d %3d %1.6lf %1.6lf\n", theta, PWM, PWMReverse, instruction, asserCons);
+    // ? Affichage de l'commande PWM et de l'angle theta
+    // Serial.print(PWM);
+    // Serial.print(" ");
+    // Serial.print(PWMReverse);
+    // Serial.print(" ");
+    Serial.print(Ec);
+    Serial.print(" ");
+    Serial.print(theta);
+    Serial.println(" ");
+    Serial.print(GTheta);
+    Serial.println(" ");
 
     FlagCalcul = 0;
   }
