@@ -26,8 +26,9 @@ void callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
 void receptionBT(void);
 
 char FlagCalcul = 0;
-double Te = 10;   // Période d'échantillonage en ms
-double Tau = 100; // Constante de temps du filtre en ms
+double Te = 10.0;   // Période d'échantillonage en ms
+double Tau = 275.0; // Constante de temps du filtre en ms
+double EncTau = 825.0; // Constante de temps du filtre en ms
 
 // ! Déclaration des pins
 int ppwmda = 32;
@@ -54,33 +55,46 @@ int pwmda = 0;
 int pwmdb = 0;
 int pwmga = 0;
 int pwmgb = 0;
-int PWM = 0;
-int PWMReverse = 0;
-bool Unable = false;
 
 // ! Variables pour le filtre de Kalman
-double GTheta = 0;
-double GFTheta = 0;
-double OldGFTheta = 0;
-double RTheta = 0;
-double RFTheta = 0;
-double OldRFTheta = 0;
-double theta = 0;
+double GTheta = 0.0;
+double GFTheta = 0.0;
+double OldGFTheta = 0.0;
+double RTheta = 0.0;
+double RFTheta = 0.0;
+double OldRFTheta = 0.0;
+double theta = 0.0;
 
 // ! Fonction de transfert du filtre
 double A, B;
+double AVit, BVit;
 
 // ! Variables de schéma bloc de commande
-double thetaCons = 0;
-double thetaEq = -0.241786949428571;
-double consigne = 0;
+double thetaCons = 0.0;
+double thetaEq = -0.105;
+double erreur = 0.0;
 double commande = 0;
-double C0 = 1.2;
-double KD = 0;
-double frottement = 0.35;
-double Ec = 0;
-double asserCons = 0;
-double alpha = 255;
+double C0 = 1000.0;
+double CD = 58.0;
+double frottement = 27.75;
+double asserCons = 0.0;
+double alpha = 127;
+
+// ! Variables pour les encodeurs et leur asservissement
+int DPos = 0;
+int GPos = 0;
+double RPosPrev = 0.0;
+double RPos = 0.0;
+double VRot = 0.0;
+double VFRot = 0.0;
+double vitCons = 0.0;
+double error = 0.0;
+double prevError = 0.0;
+double sumError = 0.0;
+double corrError = 0.0;
+double KP = 1.0; // kp pour la stabilisation de la position (translation)
+double KD = 0.1;    // kd pour la stabilisation de la position (translation)
+double KI = 0.001;    // ki pour la stabilisation de la position (translation)
 
 // timer and flag for example, not needed for encoders
 unsigned long encoder2lastToggled;
@@ -94,48 +108,57 @@ void controle(void *parameters)
   {
     mpu.getEvent(&a, &g, &temp);
 
-    // ! Calcul de l'angle par rapport aux axes y et z de l'accéléromètre
-    GTheta = atan2(a.acceleration.y, a.acceleration.z);
+    // ! Calcul de l'angle par rapport aux axes y et x de l'accéléromètre (filtre complémentaire)
+    GTheta = atan2(a.acceleration.y, a.acceleration.x);  // Angle accéléro brut
 
     //* Passe-bas pour supprimer les bruits des hautes fréquences cependant on perd la dynamique du signal
-    GFTheta = (A * GTheta) + (B * OldGFTheta);
-    OldGFTheta = GFTheta;
+    GFTheta = (A * GTheta) + (B * OldGFTheta);  // Filtre passe-bas
+    OldGFTheta = GFTheta;  // Sauvegarder pour la prochaine itération
 
     //* Passe-haut pour reconstruire le signal sans les oscillations dûes au côté peu amorti des accéléromètres
-    RTheta = (-1) * g.gyro.x * Tau * 0.001; // ? Tau est en ms, on le met en seconde pour les calculs qui suivent
-    RFTheta = (A * RTheta) + (B * OldRFTheta);
-    OldRFTheta = RFTheta;
+    RTheta = -g.gyro.z * Tau / 1000; // Intégration du gyro (Tau en ms → secondes)
+    RFTheta = (A * RTheta) + (B * OldRFTheta);  // Filtre passe-haut
+    OldRFTheta = RFTheta;  // Sauvegarder pour la prochaine itération
 
-    theta = RFTheta + GFTheta;
+    theta = RFTheta + GFTheta;  // Fusion complémentaire
 
-    // ? Calcul de la consigne
-    theta =  theta - (thetaEq + thetaCons) ;
-    asserCons = (theta * C0) + (g.gyro.x) * KD;
+    // mesures des valeurs des encodeurs
+    DPos = encoderd.getCount();
+    GPos = encoderg.getCount();
 
-    // Calcul de la commande compensée avec saturation
-  if (asserCons > thetaEq) {
-      Ec = asserCons - frottement;
-  } else if (asserCons < thetaEq) {
-      Ec = asserCons + frottement;
-  }
+    RPosPrev = RPos;          // sauvegarde de la position moyenne précédente
+    RPos = (DPos + GPos) / 2; // position moyenne des encodeurs
 
-  // Calculer la commande PWM une seule fois
-  commande = (int)(Ec * alpha);
-  if (commande >= 120)
-  {
-    commande = 120;
-  }
-  if (commande <= -120)
-  {
-    commande = -120;
-  }
-  // ! Moteur droit
-  // ledcWrite(can0, 127 - commande);
-  // ledcWrite(can1, 127 + commande);
-  
-  // ! Moteur gauche
-  // ledcWrite(can2, 127 + commande);
-  // ledcWrite(can3, 127 - commande);
+    VRot = (RPos - RPosPrev) / (Te);       // vitesse de rotation moyenne des roues
+    VFRot = VRot * AVit + VFRot * BVit; // filtre passe bas pour filtrer les bruits
+    
+    error = vitCons - VFRot;
+    sumError += error;
+    corrError = KI * sumError * Te;
+
+    // thetaCons = error * KP + (((error - prevError) * KD) / Te) + corrError; // PD + I
+
+    // ? Calcul de l'erreur et asservissement de la position angulaire
+    erreur = (thetaEq + thetaCons) - theta;  // Erreur de position angulaire
+    asserCons = erreur * C0 + (g.gyro.z) * CD;  // PD sur l'angle
+
+    // Compensation des frottements secs
+    if (asserCons >= 0) {
+      commande = asserCons + frottement;
+    } else if (asserCons < 0) {
+      commande = asserCons - frottement;
+    }
+
+    // Saturation de la commande
+    commande = constrain(commande, -120, 120);
+
+    // ! Commande des moteurs
+    ledcWrite(can0, (int)(127 + commande));
+    ledcWrite(can1, (int)(127 - commande));
+    
+    // ! Moteur gauche
+    ledcWrite(can2, (int)(127 - commande));
+    ledcWrite(can3, (int)(127 + commande));
 
     FlagCalcul = 1;
 
@@ -164,10 +187,7 @@ void setup()
   encoderd.clearCount();
   encoderg.clearCount();
 
-  // Serial.println("Encoder Start = " + String((int32_t)encoder.getCount()));
 
-  // set the lastToggle
-  // encoder2lastToggled = millis();
 
   // ! Recherche du MPU6050
   if (!mpu.begin())
@@ -210,6 +230,10 @@ void setup()
   // ! Calcul des coefficents du filtre sans développement des expressions de la fonction de transfert
   A = 1 / (1 + Tau / Te);
   B = A * (Tau / Te);
+
+  // ! Calcul des coefficents du filtre sans développement des expressions de la fonction de transfert
+  A = 1 / (1 + EncTau / Te);
+  B = A * (EncTau / Te);
 }
 
 void reception(char ch)
@@ -250,17 +274,36 @@ void reception(char ch)
     {
       C0 = valeur.toFloat();
     }
+    if (commande == "CD")
+    {
+      CD = valeur.toFloat();
+    }
+    if (commande == "CF")
+    {
+      frottement = valeur.toInt();
+    }
+    if (commande == "thetaEq")
+    {
+      thetaEq = valeur.toFloat();
+    }
+    if (commande == "KP")
+    {
+      KP = valeur.toFloat();
+    }
     if (commande == "KD")
     {
       KD = valeur.toFloat();
     }
-    if (commande == "CF")
+    if (commande == "KI")
     {
-      frottement = valeur.toFloat();
+      KI = valeur.toFloat();
     }
-    if (commande == "thetaEq")
+    if (commande == "ETau")
     {
-      thetaEq = valeur.toInt();
+      EncTau = valeur.toFloat();
+      // Calcul coeff filtre
+      AVit = 1 / (1 + EncTau / Te);
+      BVit = AVit * (EncTau / Te);
     }
 
     chaine = "";
@@ -280,15 +323,11 @@ void loop()
     // Serial.printf("%4.2lf %4.2lf %4.2lf \n", g.gyro.x, g.gyro.y, g.gyro.z);
 
     // ? Affichage de l'commande PWM et de l'angle theta
-    // Serial.print(PWM);
-    // Serial.print(" ");
-    // Serial.print(PWMReverse);
-    // Serial.print(" ");
-    Serial.print(Ec);
+    Serial.print(commande);
+    Serial.print(" ");
+    Serial.print(erreur);
     Serial.print(" ");
     Serial.print(theta);
-    Serial.println(" ");
-    Serial.print(GTheta);
     Serial.println(" ");
 
     FlagCalcul = 0;
